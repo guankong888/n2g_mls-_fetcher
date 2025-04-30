@@ -49,16 +49,14 @@ def fetch_master_data_graph(access_token):
     # 3) Concat all sheets
     combined = pd.concat(xls.values(), ignore_index=True)
 
-    # 4) Trim to exactly two columns
+    # 4) Trim to exactly two columns & rename
     combined = combined.iloc[:, :2]
     combined.columns = ["Club Code", "Address"]
 
     # 5) Remove any repeated header rows
-    header_mask = (
-        combined["Club Code"].astype(str).str.strip().str.lower() != "club code"
-        & combined["Address"].astype(str).str.strip().str.lower() != "address"
-    )
-    combined = combined.loc[header_mask]
+    cond1 = combined["Club Code"].astype(str).str.strip().str.lower() != "club code"
+    cond2 = combined["Address"].astype(str).str.strip().str.lower() != "address"
+    combined = combined.loc[cond1 & cond2]
 
     # 6) Drop rows with missing or blank Address
     combined = combined[combined["Address"].notna()]
