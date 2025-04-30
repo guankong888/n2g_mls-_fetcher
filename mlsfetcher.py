@@ -26,7 +26,7 @@ OUTPUT_FILE = "master_location_sheet.csv"
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s: %(message)s")
 
-# Ensure script directory as working directory so file writes are predictable
+# Ensure script directory as working directory
 def ensure_working_dir():
     try:
         base = os.path.dirname(os.path.abspath(__file__))
@@ -35,7 +35,7 @@ def ensure_working_dir():
     os.chdir(base)
     logging.info(f"Working directory set to {base}")
 
-
+# Authenticate and get access token
 def authenticate_graph():
     app = ConfidentialClientApplication(
         CLIENT_ID,
@@ -47,13 +47,15 @@ def authenticate_graph():
         raise RuntimeError("Graph authentication failed: " + result.get("error_description","<no error>"))
     return result["access_token"]
 
-
+# Fetch and combine sheets
 def fetch_master_data_graph(access_token):
     headers = {"Authorization": f"Bearer {access_token}"}
+    # Download workbook bytes
     url = f"{GRAPH_API_ENDPOINT}/drives/{DRIVE_ID}/items/{ITEM_ID}/content"
     resp = requests.get(url, headers=headers)
     resp.raise_for_status()
 
+    # Load Excel and inspect sheets
     excel_file = pd.ExcelFile(io.BytesIO(resp.content), engine="openpyxl")
     available = [s.strip() for s in excel_file.sheet_names]
     logging.info(f"Available sheets: {available}")
@@ -70,7 +72,8 @@ def fetch_master_data_graph(access_token):
         dfs.append(df)
 
     if not dfs:
-        raise RuntimeError("None of the desired sheets were loaded.")
+        logging.error("No sheets loaded. Returning empty DataFrame.")
+        return pd.DataFrame(columns=["Club Code","Address"])
 
     combined = pd.concat(dfs, ignore_index=True)
     combined = combined.iloc[:, :2]
@@ -82,17 +85,16 @@ def fetch_master_data_graph(access_token):
         combined["Address"].astype(str).str.lower().eq("address")
     )
     combined = combined.loc[~mask_header]
-
-    # drop empty addresses
+    # drop empty rows
     combined = combined[combined["Address"].notna()]
     combined = combined[combined["Address"].str.strip().ne("")]
 
-    combined["Club Code"] = combined["Club Code"].str.strip()
-    combined["Address"]   = combined["Address"].str.strip()
+    combined["Club Code"] = combined["Club Code"].astype(str).str.strip()
+    combined["Address"]   = combined["Address"].astype(str).str.strip()
 
     return combined
 
-
+# Write CSV with explicit overwrite and logging
 def write_csv(df, path):
     try:
         df.to_csv(path, index=False)
@@ -103,19 +105,22 @@ def write_csv(df, path):
         logging.error(f"Failed to write CSV to {path}: {e}")
         raise
 
-
+# Main execution
 def main():
     ensure_working_dir()
-    logging.info("🔐 Authenticating to Graph…")
-    token = authenticate_graph()
 
-    logging.info("⬇️ Fetching and parsing workbook…")
-    mls = fetch_master_data_graph(token)
+    # Fetch data
+    try:
+        logging.info("🔐 Authenticating to Graph…")
+        token = authenticate_graph()
+        logging.info("⬇️ Fetching and parsing workbook…")
+        mls = fetch_master_data_graph(token)
+    except Exception as e:
+        logging.error(f"Error during fetch: {e}")
+        mls = pd.DataFrame(columns=["Club Code","Address"])
 
-    logging.info(f"✅ Combined total rows: {len(mls)} across {len(STATE_SHEETS)} sheets.")
-    logging.info("--- Full dataset ---")
-    logging.info("\n" + mls.to_string(index=False))
-
+    # Log and write
+    logging.info(f"✅ Final dataset rows: {len(mls)}")
     write_csv(mls, OUTPUT_FILE)
 
 if __name__ == "__main__":
