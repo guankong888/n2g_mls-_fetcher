@@ -14,10 +14,11 @@ TENANT_ID     = os.getenv("AZURE_TENANT_ID",     "d72741b9-6bf4-4282-8dfd-0af4f5
 
 GRAPH_API_ENDPOINT = "https://graph.microsoft.com/v1.0"
 
-# these come from your earlier Graph calls
+# these sheets you need
+STATE_SHEETS = ["Arizona","California","Nevada","Utah","Florida","Texas"]
+# these IDs from earlier Graph calls
 DRIVE_ID     = "b!BCUflbar8ka0_5exbILvkB5aHEMI7flArYOiUv-56dNWAeHXUqBXS6BBqmv_35m7"
 ITEM_ID      = "012R5EVVNAQ23DVVPSV5GYCE7GRIK5D4FL"
-STATE_SHEETS = ["Arizona","California","Nevada","Utah","Florida","Texas"]
 # ───────────────────────────────────────────────────────────────
 
 logging.basicConfig(level=logging.INFO, format="%(message)s")
@@ -33,6 +34,7 @@ def authenticate_graph():
         raise RuntimeError("Graph authentication failed: " + result.get("error_description","<no error>"))
     return result["access_token"]
 
+
 def fetch_master_data_graph(access_token):
     headers = {"Authorization": f"Bearer {access_token}"}
 
@@ -41,42 +43,44 @@ def fetch_master_data_graph(access_token):
     resp = requests.get(url, headers=headers)
     resp.raise_for_status()
 
-    # 2) Read only D:E from each state sheet
-    xls = pd.read_excel(
-        io.BytesIO(resp.content),
-        sheet_name=STATE_SHEETS,
-        usecols="D:E",
-        engine="openpyxl",
-    )
+    # 2) Load into ExcelFile to inspect sheets
+    excel_file = pd.ExcelFile(io.BytesIO(resp.content), engine="openpyxl")
+    logging.info(f"Available sheets in workbook: {excel_file.sheet_names}")
 
-    # 3) Log per-sheet row counts
-    for name, df in xls.items():
-        logging.info(f"Sheet {name}: {len(df)} rows")
+    dfs = []
+    for sheet in STATE_SHEETS:
+        if sheet not in excel_file.sheet_names:
+            logging.warning(f"Sheet '{sheet}' not found, skipping.")
+            continue
+        df = excel_file.parse(sheet_name=sheet, usecols="D:E")
+        logging.info(f"'{sheet}': {len(df)} rows")
+        dfs.append(df)
 
-    # 4) Concat all sheets
-    combined = pd.concat(xls.values(), ignore_index=True)
+    if not dfs:
+        raise RuntimeError("No valid state sheets found in workbook.")
 
-    # 5) Trim to exactly two columns & rename
+    # 3) Combine and clean
+    combined = pd.concat(dfs, ignore_index=True)
     combined = combined.iloc[:, :2]
     combined.columns = ["Club Code", "Address"]
 
-    # 6) Remove header-rows where both columns equal the header
+    # filter out pulled headers
     mask_header = (
         combined["Club Code"].astype(str).str.strip().str.lower() == "club code"
-        ) & (
+    ) & (
         combined["Address"].astype(str).str.strip().str.lower() == "address"
     )
     combined = combined.loc[~mask_header]
 
-    # 7) Drop rows with missing or blank Address only
+    # drop empty addresses
     combined = combined[combined["Address"].notna()]
     combined = combined[combined["Address"].astype(str).str.strip() != ""]
 
-    # 8) Strip whitespace from both columns
     combined["Club Code"] = combined["Club Code"].astype(str).str.strip()
     combined["Address"]   = combined["Address"].astype(str).str.strip()
 
     return combined
+
 
 def main():
     logging.info("🔐 Authenticating to Graph…")
@@ -89,7 +93,6 @@ def main():
     logging.info("Here’s a preview:")
     logging.info(mls.head(10).to_string(index=False))
 
-    # write out CSV for GitHub Actions or local use
     mls.to_csv("master_location_sheet.csv", index=False)
     logging.info("✅ Wrote master_location_sheet.csv")
 
