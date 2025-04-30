@@ -55,11 +55,12 @@ def fetch_master_data_graph(access_token):
     resp = requests.get(url, headers=headers)
     resp.raise_for_status()
 
-    # Load Excel and inspect sheets
+    # Load Excel file
     excel_file = pd.ExcelFile(io.BytesIO(resp.content), engine="openpyxl")
     available = [s.strip() for s in excel_file.sheet_names]
     logging.info(f"Available sheets: {available}")
 
+    # Parse each desired sheet
     dfs = []
     lower_map = {s.strip().lower(): s for s in excel_file.sheet_names}
     for desired in STATE_SHEETS:
@@ -75,20 +76,38 @@ def fetch_master_data_graph(access_token):
         logging.error("No sheets loaded. Returning empty DataFrame.")
         return pd.DataFrame(columns=["Club Code","Address"])
 
+    # Log pre-concat totals
+    total_pre = sum(len(df) for df in dfs)
+    logging.info(f"Total rows loaded before concat: {total_pre}")
+
+    # Concatenate
     combined = pd.concat(dfs, ignore_index=True)
+    logging.info(f"Combined rows after concat: {len(combined)}")
+
+    # Trim to two columns and rename
     combined = combined.iloc[:, :2]
     combined.columns = ["Club Code","Address"]
+    logging.info(f"Dataset shape after trimming: {combined.shape}")
 
-    # remove repeated header rows
+    # Remove any in-band header rows
     mask_header = (
         combined["Club Code"].astype(str).str.lower().eq("club code") &
         combined["Address"].astype(str).str.lower().eq("address")
     )
+    removed = mask_header.sum()
+    if removed:
+        logging.info(f"Removing {removed} in-band header rows")
     combined = combined.loc[~mask_header]
-    # drop empty rows
+    logging.info(f"Rows after header removal: {len(combined)}")
+
+    # Drop empty addresses
+    before_drop = len(combined)
     combined = combined[combined["Address"].notna()]
     combined = combined[combined["Address"].str.strip().ne("")]
+    after_drop = len(combined)
+    logging.info(f"Dropped {before_drop - after_drop} empty rows; remaining: {after_drop}")
 
+    # Strip whitespace
     combined["Club Code"] = combined["Club Code"].astype(str).str.strip()
     combined["Address"]   = combined["Address"].astype(str).str.strip()
 
