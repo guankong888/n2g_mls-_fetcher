@@ -3,9 +3,7 @@ import io
 import os
 import requests
 import pandas as pd
-import logging
 from msal import ConfidentialClientApplication
-from datetime import datetime
 
 # ───────────────────────────────────────────────────────────────
 # CONFIG: set these (or export as env vars)
@@ -15,27 +13,12 @@ TENANT_ID     = os.getenv("AZURE_TENANT_ID",     "d72741b9-6bf4-4282-8dfd-0af4f5
 
 GRAPH_API_ENDPOINT = "https://graph.microsoft.com/v1.0"
 
-# sheets to pull (case-insensitive, trimmed)
+# these come from your earlier Graph calls
+DRIVE_ID     = "b!BCUflbar8ka0_5exbILvkB5aHEMI7flArYOiUv-56dNWAeHXUqBXS6BBqmv_35m7"
+ITEM_ID      = "012R5EVVNAQ23DVVPSV5GYCE7GRIK5D4FL"
 STATE_SHEETS = ["Arizona","California","Nevada","Utah","Florida","Texas"]
-# drive + item IDs
-DRIVE_ID = "b!BCUflbar8ka0_5exbILvkB5aHEMI7flArYOiUv-56dNWAeHXUqBXS6BBqmv_35m7"
-ITEM_ID  = "012R5EVVNAQ23DVVPSV5GYCE7GRIK5D4FL"
-# output file
-OUTPUT_FILE = "master_location_sheet.csv"
 # ───────────────────────────────────────────────────────────────
 
-logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s: %(message)s")
-
-# Ensure script directory as working directory
-def ensure_working_dir():
-    try:
-        base = os.path.dirname(os.path.abspath(__file__))
-    except NameError:
-        base = os.getcwd()
-    os.chdir(base)
-    logging.info(f"Working directory set to {base}")
-
-# Authenticate and get access token
 def authenticate_graph():
     app = ConfidentialClientApplication(
         CLIENT_ID,
@@ -47,100 +30,47 @@ def authenticate_graph():
         raise RuntimeError("Graph authentication failed: " + result.get("error_description","<no error>"))
     return result["access_token"]
 
-# Fetch and combine sheets
 def fetch_master_data_graph(access_token):
     headers = {"Authorization": f"Bearer {access_token}"}
-    # Download workbook bytes
+
+    # 1) Download the entire workbook
     url = f"{GRAPH_API_ENDPOINT}/drives/{DRIVE_ID}/items/{ITEM_ID}/content"
     resp = requests.get(url, headers=headers)
     resp.raise_for_status()
 
-    # Load Excel file
-    excel_file = pd.ExcelFile(io.BytesIO(resp.content), engine="openpyxl")
-    available = [s.strip() for s in excel_file.sheet_names]
-    logging.info(f"Available sheets: {available}")
-
-    # Parse each desired sheet
-    dfs = []
-    lower_map = {s.strip().lower(): s for s in excel_file.sheet_names}
-    for desired in STATE_SHEETS:
-        actual = lower_map.get(desired.strip().lower())
-        if not actual:
-            logging.warning(f"Sheet matching '{desired}' not found, skipping.")
-            continue
-        df = excel_file.parse(sheet_name=actual, usecols="D:E")
-        logging.info(f"'{actual}': pulled {len(df)} rows")
-        dfs.append(df)
-
-    if not dfs:
-        logging.error("No sheets loaded. Returning empty DataFrame.")
-        return pd.DataFrame(columns=["Club Code","Address"])
-
-    # Log pre-concat totals
-    total_pre = sum(len(df) for df in dfs)
-    logging.info(f"Total rows loaded before concat: {total_pre}")
-
-    # Concatenate
-    combined = pd.concat(dfs, ignore_index=True)
-    logging.info(f"Combined rows after concat: {len(combined)}")
-
-    # Trim to two columns and rename
-    combined = combined.iloc[:, :2]
-    combined.columns = ["Club Code","Address"]
-    logging.info(f"Dataset shape after trimming: {combined.shape}")
-
-    # Remove any in-band header rows
-    mask_header = (
-        combined["Club Code"].astype(str).str.lower().eq("club code") &
-        combined["Address"].astype(str).str.lower().eq("address")
+    # 2) Read only D:E from each state sheet, using row-1 as header to skip the sheet title
+    xls = pd.read_excel(
+        io.BytesIO(resp.content),
+        sheet_name=STATE_SHEETS,
+        usecols="D:E",
+        header=1,
+        engine="openpyxl",
     )
-    removed = mask_header.sum()
-    if removed:
-        logging.info(f"Removing {removed} in-band header rows")
-    combined = combined.loc[~mask_header]
-    logging.info(f"Rows after header removal: {len(combined)}")
 
-    # Drop empty addresses
-    before_drop = len(combined)
-    combined = combined[combined["Address"].notna()]
-    combined = combined[combined["Address"].str.strip().ne("")]
-    after_drop = len(combined)
-    logging.info(f"Dropped {before_drop - after_drop} empty rows; remaining: {after_drop}")
+    # 3) Concat, trim extras, rename columns
+    combined = pd.concat(xls.values(), ignore_index=True)
+    combined = combined.iloc[:, :2]
+    combined.columns = ["Club Code", "Address"]
 
-    # Strip whitespace
+    # 4) Drop any row missing either key field, strip whitespace
+    combined = combined.dropna(subset=["Club Code", "Address"])
     combined["Club Code"] = combined["Club Code"].astype(str).str.strip()
     combined["Address"]   = combined["Address"].astype(str).str.strip()
 
     return combined
 
-# Write CSV with explicit overwrite and logging
-def write_csv(df, path):
-    try:
-        df.to_csv(path, index=False)
-        size = os.path.getsize(path)
-        mtime = datetime.fromtimestamp(os.path.getmtime(path)).isoformat()
-        logging.info(f"Wrote {path} ({size:,} bytes, modified: {mtime})")
-    except Exception as e:
-        logging.error(f"Failed to write CSV to {path}: {e}")
-        raise
-
-# Main execution
 def main():
-    ensure_working_dir()
+    print("🔐 Authenticating to Graph…")
+    token = authenticate_graph()
 
-    # Fetch data
-    try:
-        logging.info("🔐 Authenticating to Graph…")
-        token = authenticate_graph()
-        logging.info("⬇️ Fetching and parsing workbook…")
-        mls = fetch_master_data_graph(token)
-    except Exception as e:
-        logging.error(f"Error during fetch: {e}")
-        mls = pd.DataFrame(columns=["Club Code","Address"])
+    print("⬇️ Downloading and parsing the MLS workbook…")
+    mls = fetch_master_data_graph(token)
 
-    # Log and write
-    logging.info(f"✅ Final dataset rows: {len(mls)}")
-    write_csv(mls, OUTPUT_FILE)
+    print(f"✅ Pulled {len(mls)} rows across {len(STATE_SHEETS)} sheets. Here’s a preview:")
+    print(mls.head(10).to_string(index=False))
+
+    mls.to_csv("master_location_sheet.csv", index=False)
+    print("✅ Wrote master_location_sheet.csv")
 
 if __name__ == "__main__":
     main()
