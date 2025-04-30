@@ -49,10 +49,24 @@ def fetch_master_data_graph(access_token):
     # 3) Concat all sheets
     combined = pd.concat(xls.values(), ignore_index=True)
 
-    # ── TRIM TO EXACTLY TWO COLUMNS BEFORE RENAMING ────────────────
+    # 4) Trim to exactly two columns
     combined = combined.iloc[:, :2]
     combined.columns = ["Club Code", "Address"]
-    # ────────────────────────────────────────────────────────────────
+
+    # 5) Remove any repeated header rows
+    header_mask = (
+        combined["Club Code"].astype(str).str.strip().str.lower() != "club code"
+        & combined["Address"].astype(str).str.strip().str.lower() != "address"
+    )
+    combined = combined.loc[header_mask]
+
+    # 6) Drop rows with missing or blank Address
+    combined = combined[combined["Address"].notna()]
+    combined = combined[combined["Address"].astype(str).str.strip() != ""]
+
+    # 7) Strip whitespace from both columns
+    combined["Club Code"] = combined["Club Code"].astype(str).str.strip()
+    combined["Address"]   = combined["Address"].astype(str).str.strip()
 
     return combined
 
