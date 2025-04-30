@@ -5,6 +5,7 @@ import requests
 import pandas as pd
 import logging
 from msal import ConfidentialClientApplication
+from datetime import datetime
 
 # ───────────────────────────────────────────────────────────────
 # CONFIG: set these (or export as env vars)
@@ -14,14 +15,14 @@ TENANT_ID     = os.getenv("AZURE_TENANT_ID",     "d72741b9-6bf4-4282-8dfd-0af4f5
 
 GRAPH_API_ENDPOINT = "https://graph.microsoft.com/v1.0"
 
-# these sheets you need
+# sheets to pull
 STATE_SHEETS = ["Arizona","California","Nevada","Utah","Florida","Texas"]
-# these IDs from earlier Graph calls
-DRIVE_ID     = "b!BCUflbar8ka0_5exbILvkB5aHEMI7flArYOiUv-56dNWAeHXUqBXS6BBqmv_35m7"
-ITEM_ID      = "012R5EVVNAQ23DVVPSV5GYCE7GRIK5D4FL"
+# drive + item IDs
+DRIVE_ID = "b!BCUflbar8ka0_5exbILvkB5aHEMI7flArYOiUv-56dNWAeHXUqBXS6BBqmv_35m7"
+ITEM_ID  = "012R5EVVNAQ23DVVPSV5GYCE7GRIK5D4FL"
 # ───────────────────────────────────────────────────────────────
 
-logging.basicConfig(level=logging.INFO, format="%(message)s")
+logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s: %(message)s")
 
 def authenticate_graph():
     app = ConfidentialClientApplication(
@@ -37,47 +38,43 @@ def authenticate_graph():
 
 def fetch_master_data_graph(access_token):
     headers = {"Authorization": f"Bearer {access_token}"}
-
-    # 1) Download workbook bytes
     url = f"{GRAPH_API_ENDPOINT}/drives/{DRIVE_ID}/items/{ITEM_ID}/content"
     resp = requests.get(url, headers=headers)
     resp.raise_for_status()
 
-    # 2) Load into ExcelFile to inspect sheets
+    # load workbook
     excel_file = pd.ExcelFile(io.BytesIO(resp.content), engine="openpyxl")
-    logging.info(f"Available sheets in workbook: {excel_file.sheet_names}")
+    logging.info(f"Available sheets: {excel_file.sheet_names}")
 
     dfs = []
     for sheet in STATE_SHEETS:
         if sheet not in excel_file.sheet_names:
-            logging.warning(f"Sheet '{sheet}' not found, skipping.")
+            logging.warning(f"Sheet '{sheet}' missing, skipping.")
             continue
         df = excel_file.parse(sheet_name=sheet, usecols="D:E")
-        logging.info(f"'{sheet}': {len(df)} rows")
+        logging.info(f"Pulled {len(df)} rows from '{sheet}'")
         dfs.append(df)
 
     if not dfs:
-        raise RuntimeError("No valid state sheets found in workbook.")
+        raise RuntimeError("No sheets were loaded.")
 
-    # 3) Combine and clean
     combined = pd.concat(dfs, ignore_index=True)
     combined = combined.iloc[:, :2]
-    combined.columns = ["Club Code", "Address"]
+    combined.columns = ["Club Code","Address"]
 
-    # filter out pulled headers
+    # drop header rows
     mask_header = (
-        combined["Club Code"].astype(str).str.strip().str.lower() == "club code"
-    ) & (
-        combined["Address"].astype(str).str.strip().str.lower() == "address"
+        combined["Club Code"].astype(str).str.lower().eq("club code") &
+        combined["Address"].astype(str).str.lower().eq("address")
     )
     combined = combined.loc[~mask_header]
 
-    # drop empty addresses
+    # drop empty
     combined = combined[combined["Address"].notna()]
-    combined = combined[combined["Address"].astype(str).str.strip() != ""]
+    combined = combined[combined["Address"].str.strip().ne("")]
 
-    combined["Club Code"] = combined["Club Code"].astype(str).str.strip()
-    combined["Address"]   = combined["Address"].astype(str).str.strip()
+    combined["Club Code"] = combined["Club Code"].str.strip()
+    combined["Address"] = combined["Address"].str.strip()
 
     return combined
 
@@ -86,15 +83,17 @@ def main():
     logging.info("🔐 Authenticating to Graph…")
     token = authenticate_graph()
 
-    logging.info("⬇️ Downloading and parsing the MLS workbook…")
+    logging.info("⬇️ Fetching and parsing workbook…")
     mls = fetch_master_data_graph(token)
 
-    logging.info(f"✅ Combined total: {len(mls)} rows across {len(STATE_SHEETS)} sheets")
-    logging.info("Here’s a preview:")
-    logging.info(mls.head(10).to_string(index=False))
+    logging.info(f"✅ Combined total rows: {len(mls)} across {len(STATE_SHEETS)} sheets.")
+    logging.info("--- Full dataset ---")
+    logging.info("\n" + mls.to_string(index=False))
 
-    mls.to_csv("master_location_sheet.csv", index=False)
-    logging.info("✅ Wrote master_location_sheet.csv")
+    out = "master_location_sheet.csv"
+    mls.to_csv(out, index=False)
+    mtime = datetime.fromtimestamp(os.path.getmtime(out)).isoformat()
+    logging.info(f"✅ Wrote {out} (modified: {mtime})")
 
 if __name__ == "__main__":
     main()
