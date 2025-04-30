@@ -1,0 +1,3 @@
+requests>=2.25
+pandas>=1.3
+msal>=1.10
