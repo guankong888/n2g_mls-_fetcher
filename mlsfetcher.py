@@ -15,7 +15,7 @@ TENANT_ID     = os.getenv("AZURE_TENANT_ID",     "d72741b9-6bf4-4282-8dfd-0af4f5
 
 GRAPH_API_ENDPOINT = "https://graph.microsoft.com/v1.0"
 
-# sheets to pull
+# sheets to pull (case-insensitive, trimmed)
 STATE_SHEETS = ["Arizona","California","Nevada","Utah","Florida","Texas"]
 # drive + item IDs
 DRIVE_ID = "b!BCUflbar8ka0_5exbILvkB5aHEMI7flArYOiUv-56dNWAeHXUqBXS6BBqmv_35m7"
@@ -23,6 +23,7 @@ ITEM_ID  = "012R5EVVNAQ23DVVPSV5GYCE7GRIK5D4FL"
 # ───────────────────────────────────────────────────────────────
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s: %(message)s")
+
 
 def authenticate_graph():
     app = ConfidentialClientApplication(
@@ -42,39 +43,44 @@ def fetch_master_data_graph(access_token):
     resp = requests.get(url, headers=headers)
     resp.raise_for_status()
 
-    # load workbook
+    # load workbook and list sheets
     excel_file = pd.ExcelFile(io.BytesIO(resp.content), engine="openpyxl")
-    logging.info(f"Available sheets: {excel_file.sheet_names}")
+    available = [s.strip() for s in excel_file.sheet_names]
+    logging.info(f"Available sheets: {available}")
 
     dfs = []
-    for sheet in STATE_SHEETS:
-        if sheet not in excel_file.sheet_names:
-            logging.warning(f"Sheet '{sheet}' missing, skipping.")
+    lower_map = {s.strip().lower(): s for s in excel_file.sheet_names}
+    for desired in STATE_SHEETS:
+        key = desired.strip().lower()
+        actual = lower_map.get(key)
+        if not actual:
+            logging.warning(f"Sheet matching '{desired}' not found, skipping.")
             continue
-        df = excel_file.parse(sheet_name=sheet, usecols="D:E")
-        logging.info(f"Pulled {len(df)} rows from '{sheet}'")
+        df = excel_file.parse(sheet_name=actual, usecols="D:E")
+        logging.info(f"'{actual}': pulled {len(df)} rows")
         dfs.append(df)
 
     if not dfs:
-        raise RuntimeError("No sheets were loaded.")
+        raise RuntimeError("None of the desired sheets were loaded.")
 
+    # combine and clean
     combined = pd.concat(dfs, ignore_index=True)
     combined = combined.iloc[:, :2]
     combined.columns = ["Club Code","Address"]
 
-    # drop header rows
+    # remove repeated header rows
     mask_header = (
         combined["Club Code"].astype(str).str.lower().eq("club code") &
         combined["Address"].astype(str).str.lower().eq("address")
     )
     combined = combined.loc[~mask_header]
 
-    # drop empty
+    # drop empty addresses
     combined = combined[combined["Address"].notna()]
     combined = combined[combined["Address"].str.strip().ne("")]
 
     combined["Club Code"] = combined["Club Code"].str.strip()
-    combined["Address"] = combined["Address"].str.strip()
+    combined["Address"]   = combined["Address"].str.strip()
 
     return combined
 
