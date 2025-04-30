@@ -1,9 +1,10 @@
 name: Fetch N2G MLS
 
+# runs every day at 08:00 UTC + manual trigger
 on:
   schedule:
-    - cron:  '0 8 * * *'      # runs every day at 08:00 UTC
-  workflow_dispatch:        # also allows manual “Run workflow” trigger
+    - cron: '0 8 * * *'
+  workflow_dispatch:
 
 jobs:
   fetch:
@@ -24,9 +25,16 @@ jobs:
           pip install -r requirements.txt
 
       - name: Fetch worksheets from SharePoint
+        # 🔥 Hard-coded Azure creds below
         env:
           AZURE_CLIENT_ID:     "430ac0be-52d5-4562-ba2a-4739140e638f"
-          AZURE_CLIENT_SECRET: "koI8Q~8iN1nhYUjYxg17lEs_fTGu7bF.mxmY4bNl"
+          AZURE_CLIENT_SECRET: "TWM8Q~srCA1PgMefilHpMRTLADqNkqWrMpAUOaXA"
           AZURE_TENANT_ID:     "d72741b9-6bf4-4282-8dfd-0af4f56d4023"
         run: |
           python mlsfetcher.py
+
+      - name: Upload MLS CSV
+        uses: actions/upload-artifact@v3
+        with:
+          name: master-location-sheet
+          path: master_location_sheet.csv
