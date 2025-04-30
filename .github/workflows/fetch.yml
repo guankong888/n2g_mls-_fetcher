@@ -1,5 +1,8 @@
 name: Fetch N2G MLS
 
+permissions:
+  contents: write    # allow GH Actions to commit & push changes
+
 on:
   schedule:
     - cron: '0 8 * * *'       # daily at 08:00 UTC
