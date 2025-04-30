@@ -1,0 +1,32 @@
+name: Fetch N2G MLS
+
+on:
+  schedule:
+    - cron:  '0 8 * * *'      # runs every day at 08:00 UTC
+  workflow_dispatch:        # also allows manual “Run workflow” trigger
+
+jobs:
+  fetch:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out code
+        uses: actions/checkout@v3
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Fetch worksheets from SharePoint
+        env:
+          AZURE_CLIENT_ID:     "430ac0be-52d5-4562-ba2a-4739140e638f"
+          AZURE_CLIENT_SECRET: "koI8Q~8iN1nhYUjYxg17lEs_fTGu7bF.mxmY4bNl"
+          AZURE_TENANT_ID:     "d72741b9-6bf4-4282-8dfd-0af4f56d4023"
+        run: |
+          python mlsfetcher.py
