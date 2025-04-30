@@ -3,6 +3,7 @@ import io
 import os
 import requests
 import pandas as pd
+import logging
 from msal import ConfidentialClientApplication
 
 # ───────────────────────────────────────────────────────────────
@@ -18,6 +19,8 @@ DRIVE_ID     = "b!BCUflbar8ka0_5exbILvkB5aHEMI7flArYOiUv-56dNWAeHXUqBXS6BBqmv_35
 ITEM_ID      = "012R5EVVNAQ23DVVPSV5GYCE7GRIK5D4FL"
 STATE_SHEETS = ["Arizona","California","Nevada","Utah","Florida","Texas"]
 # ───────────────────────────────────────────────────────────────
+
+logging.basicConfig(level=logging.INFO, format="%(message)s")
 
 def authenticate_graph():
     app = ConfidentialClientApplication(
@@ -46,41 +49,49 @@ def fetch_master_data_graph(access_token):
         engine="openpyxl",
     )
 
-    # 3) Concat all sheets
+    # 3) Log per-sheet row counts
+    for name, df in xls.items():
+        logging.info(f"Sheet {name}: {len(df)} rows")
+
+    # 4) Concat all sheets
     combined = pd.concat(xls.values(), ignore_index=True)
 
-    # 4) Trim to exactly two columns & rename
+    # 5) Trim to exactly two columns & rename
     combined = combined.iloc[:, :2]
     combined.columns = ["Club Code", "Address"]
 
-    # 5) Remove any repeated header rows
-    cond1 = combined["Club Code"].astype(str).str.strip().str.lower() != "club code"
-    cond2 = combined["Address"].astype(str).str.strip().str.lower() != "address"
-    combined = combined.loc[cond1 & cond2]
+    # 6) Remove header-rows where both columns equal the header
+    mask_header = (
+        combined["Club Code"].astype(str).str.strip().str.lower() == "club code"
+        ) & (
+        combined["Address"].astype(str).str.strip().str.lower() == "address"
+    )
+    combined = combined.loc[~mask_header]
 
-    # 6) Drop rows with missing or blank Address
+    # 7) Drop rows with missing or blank Address only
     combined = combined[combined["Address"].notna()]
     combined = combined[combined["Address"].astype(str).str.strip() != ""]
 
-    # 7) Strip whitespace from both columns
+    # 8) Strip whitespace from both columns
     combined["Club Code"] = combined["Club Code"].astype(str).str.strip()
     combined["Address"]   = combined["Address"].astype(str).str.strip()
 
     return combined
 
 def main():
-    print("🔐 Authenticating to Graph…")
+    logging.info("🔐 Authenticating to Graph…")
     token = authenticate_graph()
 
-    print("⬇️ Downloading and parsing the MLS workbook…")
+    logging.info("⬇️ Downloading and parsing the MLS workbook…")
     mls = fetch_master_data_graph(token)
 
-    print(f"✅ Pulled {len(mls)} rows across {len(STATE_SHEETS)} sheets. Here’s a preview:")
-    print(mls.head(10).to_string(index=False))
+    logging.info(f"✅ Combined total: {len(mls)} rows across {len(STATE_SHEETS)} sheets")
+    logging.info("Here’s a preview:")
+    logging.info(mls.head(10).to_string(index=False))
 
     # write out CSV for GitHub Actions or local use
     mls.to_csv("master_location_sheet.csv", index=False)
-    print("✅ Wrote master_location_sheet.csv")
+    logging.info("✅ Wrote master_location_sheet.csv")
 
 if __name__ == "__main__":
     main()
