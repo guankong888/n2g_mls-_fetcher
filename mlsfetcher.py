@@ -20,9 +20,20 @@ STATE_SHEETS = ["Arizona","California","Nevada","Utah","Florida","Texas"]
 # drive + item IDs
 DRIVE_ID = "b!BCUflbar8ka0_5exbILvkB5aHEMI7flArYOiUv-56dNWAeHXUqBXS6BBqmv_35m7"
 ITEM_ID  = "012R5EVVNAQ23DVVPSV5GYCE7GRIK5D4FL"
+# output file
+OUTPUT_FILE = "master_location_sheet.csv"
 # ───────────────────────────────────────────────────────────────
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s: %(message)s")
+
+# Ensure script directory as working directory so file writes are predictable
+def ensure_working_dir():
+    try:
+        base = os.path.dirname(os.path.abspath(__file__))
+    except NameError:
+        base = os.getcwd()
+    os.chdir(base)
+    logging.info(f"Working directory set to {base}")
 
 
 def authenticate_graph():
@@ -43,7 +54,6 @@ def fetch_master_data_graph(access_token):
     resp = requests.get(url, headers=headers)
     resp.raise_for_status()
 
-    # load workbook and list sheets
     excel_file = pd.ExcelFile(io.BytesIO(resp.content), engine="openpyxl")
     available = [s.strip() for s in excel_file.sheet_names]
     logging.info(f"Available sheets: {available}")
@@ -51,8 +61,7 @@ def fetch_master_data_graph(access_token):
     dfs = []
     lower_map = {s.strip().lower(): s for s in excel_file.sheet_names}
     for desired in STATE_SHEETS:
-        key = desired.strip().lower()
-        actual = lower_map.get(key)
+        actual = lower_map.get(desired.strip().lower())
         if not actual:
             logging.warning(f"Sheet matching '{desired}' not found, skipping.")
             continue
@@ -63,7 +72,6 @@ def fetch_master_data_graph(access_token):
     if not dfs:
         raise RuntimeError("None of the desired sheets were loaded.")
 
-    # combine and clean
     combined = pd.concat(dfs, ignore_index=True)
     combined = combined.iloc[:, :2]
     combined.columns = ["Club Code","Address"]
@@ -85,7 +93,19 @@ def fetch_master_data_graph(access_token):
     return combined
 
 
+def write_csv(df, path):
+    try:
+        df.to_csv(path, index=False)
+        size = os.path.getsize(path)
+        mtime = datetime.fromtimestamp(os.path.getmtime(path)).isoformat()
+        logging.info(f"Wrote {path} ({size:,} bytes, modified: {mtime})")
+    except Exception as e:
+        logging.error(f"Failed to write CSV to {path}: {e}")
+        raise
+
+
 def main():
+    ensure_working_dir()
     logging.info("🔐 Authenticating to Graph…")
     token = authenticate_graph()
 
@@ -96,10 +116,7 @@ def main():
     logging.info("--- Full dataset ---")
     logging.info("\n" + mls.to_string(index=False))
 
-    out = "master_location_sheet.csv"
-    mls.to_csv(out, index=False)
-    mtime = datetime.fromtimestamp(os.path.getmtime(out)).isoformat()
-    logging.info(f"✅ Wrote {out} (modified: {mtime})")
+    write_csv(mls, OUTPUT_FILE)
 
 if __name__ == "__main__":
     main()
