@@ -1,20 +1,21 @@
 name: Fetch N2G MLS
 
-# runs every day at 08:00 UTC + manual trigger
 on:
   schedule:
-    - cron: '0 8 * * *'
-  workflow_dispatch:
+    - cron: '0 8 * * *'       # daily at 08:00 UTC
+  workflow_dispatch:         # manual trigger
 
 jobs:
   fetch:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Check out code
+      - name: Check out the repo
         uses: actions/checkout@v3
+        with:
+          persist-credentials: true   # so we can push changes back
 
-      - name: Set up Python 3.11
+      - name: Set up Python
         uses: actions/setup-python@v4
         with:
           python-version: '3.11'
@@ -25,7 +26,6 @@ jobs:
           pip install -r requirements.txt
 
       - name: Fetch worksheets from SharePoint
-        # 🔥 Hard-coded Azure creds below
         env:
           AZURE_CLIENT_ID:     "430ac0be-52d5-4562-ba2a-4739140e638f"
           AZURE_CLIENT_SECRET: "TWM8Q~srCA1PgMefilHpMRTLADqNkqWrMpAUOaXA"
@@ -33,8 +33,10 @@ jobs:
         run: |
           python mlsfetcher.py
 
-      - name: Upload MLS CSV
-        uses: actions/upload-artifact@v3.1.2
-        with:
-          name: master-location-sheet
-          path: master_location_sheet.csv
+      - name: Commit updated CSV back to repo
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add master_location_sheet.csv
+          git diff --quiet --staged || git commit -m "chore: update MLS CSV [skip ci]"
+          git push
